@@ -4,3 +4,6 @@
 */cache/*
 */cache/!index.html
 */cache/!.htaccess
+*/.project
+*/.buildpath
+*/.settings
