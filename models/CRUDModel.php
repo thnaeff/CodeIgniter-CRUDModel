@@ -1,6 +1,8 @@
 <?php
 defined('BASEPATH') or exit('No direct script access allowed');
 
+include_once(BASEPATH . 'core/Model.php');
+
 
 /**
  * A base model which only contains basic CRUD functions (using CodeIgniters query builder) and
@@ -70,15 +72,25 @@ class CRUDModel extends CI_Model {
 	protected $return_type = 'array';
 
 	/**
-	 * Database table relations
+	 * Database table relations. Each relation has to be given as key-value pair. The key is the
+	 * table name, the value is an array of options (or an empty array if no options are needed).
 	 */
 	protected $belongs_to = array();
+	/**
+	 * @see $belongs_to
+	 */
 	protected $has_many = array();
 
 	/**
-	 * Temporary array of tables defined through the with() function
+	 * Temporary array of relationship tables defined through the with() function
 	 */
 	private $_temporary_with_tables;
+
+	/**
+	 * If a relationship is selected with the with() function, setting this flag to TRUE
+	 * causes the two results to be joined in the same array/object.
+	 */
+	private $_temporary_join = FALSE;
 
 	/**
 	 * Available events (keys) and event methods to execute.<br />
@@ -111,16 +123,21 @@ class CRUDModel extends CI_Model {
 	 * Initialise the model, tie into the CodeIgniter superobject and
 	 * try our best to guess the table name.
 	 *
-	 *
+	 * @param string $table_name The table name can be provided here. If the table name is not provided,
+	 * the name is guessed by pluralizing the model name
 	 */
-	public function __construct() {
+	public function __construct($table_name = NULL) {
 		parent::__construct();
 
 		// CI helper library for pluralizing/singularizing
 		$this->load->helper('inflector');
 
-		// Guess the table name by pluralising the model name (without the _m or _model extension)
-		$this->_table = plural(preg_replace('/(_m|_model)?$/', '', strtolower(get_class($this))));
+		if ($table_name == NULL) {
+			// Guess the table name by pluralising the model name (without the _m or _model extension)
+			$this->_table = plural(preg_replace('/(_m|_model)?$/', '', strtolower(get_class($this))));
+		} else {
+			$this->_table = $table_name;
+		}
 
 		/**
 		 * Use the CodeIgniter standard database.
@@ -149,6 +166,14 @@ class CRUDModel extends CI_Model {
 	}
 
 	/**
+	 * Returns the name of the database table
+	 *
+	 */
+	public function table() {
+		return $this->_table;
+	}
+
+	/**
 	 * Resets the model so that it is a well defined state
 	 */
 	public function reset() {
@@ -170,6 +195,34 @@ class CRUDModel extends CI_Model {
 	 */
 	public function get_table_fields() {
 		return $this->table_fields;
+	}
+
+	/**
+	 * Retrieves the field data for all table columns. Simply calls the field_data function on
+	 * the database object, unless nameAsKey=true (default) where the array is rebuilt with the
+	 * field names as key.
+	 *
+	 *
+	 * @param string $nameAsKey If set to TRUE, the array is rebuilt with the column name as index.
+	 * If set to FALSE, the column index is used as the array keys.
+	 * @return array The field data
+	 */
+	public function get_field_data($nameAsKey=true) {
+
+		if (!$nameAsKey) {
+			return $this->database->field_data($this->_table);
+		} else {
+			$fields = $this->database->field_data($this->_table);
+			$fieldData = array();
+			$columnIndex = 0;
+			foreach ($fields as $field) {
+				$fieldData[$field->name] = $field;
+				//$field['column_index'] = $columnIndex;
+				$columnIndex++;
+			}
+
+			return $fieldData;
+		}
 	}
 
 	/*----------------------------------------------------------------------------------------
@@ -200,14 +253,14 @@ class CRUDModel extends CI_Model {
 		}
 
 		// Limit to primary key(s) (if provided)
-		$this->set_where($this->primary_key, $primary_values);
+		$this->set_where($this->primary_key, $primay_values);
 
 		// Multiple rows expected, or just a single row?
 		$multi = ($primary_values == NULL || is_array($primary_values));
 
 		$result = $this->database->get($this->_table)->{$this->get_return_type($multi)}();
 
-		$result = $this->relate_get($result);
+		$result = $this->relate_get($result, $multi);
 
 		$this->reset();
 
@@ -333,7 +386,7 @@ class CRUDModel extends CI_Model {
 		// Limit to primary key(s) (if provided)
 		$this->set_where($this->primary_key, $primary_values);
 
-		$result = $this->database->delete($this->_table);
+		$this->database->delete($this->_table);
 		$this->reset();
 
 		$this->trigger('after_delete', array($primary_values, $result));
@@ -350,11 +403,13 @@ class CRUDModel extends CI_Model {
 	 * previously as belongs_to or has_many relationship
 	 *
 	 * @param string $related_table
+	 * @param boolean $return_foreign_model Default: FALSE. If set to TRUE, this method returns the foreign model
+	 * instead of the current model. This can be useful if the foreign table model needs additional
+	 * configuration to the provided relationship options.
 	 */
-	public function with($related_table) {
-		if (! in_array($related_table, $this->belongs_to)
-				&& ! array_key_exists($related_table, $this->belongs_to)
-				&& ! in_array($related_table, $this->has_many)
+	public function with($related_table, $return_foreign_model=false) {
+		//Checks it the table name exists as key in the belongs_to/has_many array
+		if (! array_key_exists($related_table, $this->belongs_to)
 				&& ! array_key_exists($related_table, $this->has_many)) {
 			throw new Exception('Relationship \'' . $related_table . '\' is not defined for \'' . $this->_table . '\'');
 		}
@@ -362,72 +417,136 @@ class CRUDModel extends CI_Model {
 		//Add the relationship table to the temporary with-tables so that it will
 		//be used the next time the relate_get() function is called.
 		$this->_temporary_with_tables[] = $related_table;
+
 		return $this;
 	}
 
 	/**
 	 * Returns the row(s) from the related data models, combined with the given row
 	 *
-	 * @param array $row
+	 * @param array $rows
+	 * @param boolean $multi
 	 * @return array The resulting row which includes all the relating data
 	 */
-	private function relate_get($row) {
-		if (empty($row) || empty($this->_temporary_with_tables)) {
-			return $row;
+	private function relate_get($rows, $multi) {
+		if (empty($this->_temporary_with_tables) || empty($rows)) {
+			return $rows;
 		}
 
+		if ($multi) {
+			foreach ($rows as $key=>$row) {
+				$rows[$key] = $this->belongs_to($row);
+				$rows[$key] = $this->has_many($row);
+			}
+		} else {
+			$rows = $this->belongs_to($rows);
+			$rows = $this->has_many($rows);
+		}
+		return $rows;
+	}
+
+	/**
+	 *
+	 *
+	 * @param array $row
+	 */
+	private function belongs_to($row) {
 		// Belongs to
 		foreach ( $this->belongs_to as $key => $value ) {
 			$options = $this->relate_options($key, $value);
-			$relationship = $options['relationship'];
+			$foreign_table_name = $options['foreign_table_name'];
 
-			if (in_array($relationship, $this->_temporary_with_tables)) {
-				$model_name = $relationship . '_model';
+			if (in_array($foreign_table_name, $this->_temporary_with_tables)) {
+				$model_name = $foreign_table_name . '_model';
 
 				$this->load->model($options['model'], $model_name);
-				$primary_key_name = $options['primary_key'];
 
-				$primary_value  = $this->get_row_value($row, $primary_key_name);
+				$primary_key_names = $options['primary_key'];
 
-				// Retrieve one result which has the given primary value
-				$result = $this->{$model_name}->get($primary_value);
-
-				// Add related result set to existing result set
-				if (is_object($row)) {
-					$row->{$relationship} = $result;
-				} else {
-					$row[$relationship] = $result;
+				if (!is_array($primary_key_names)) {
+					$primary_key_names = array($primary_key_names);
 				}
-			}
-		}
 
-		// Has many
-		foreach ( $this->has_many as $key => $value ) {
-			$options = $this->relate_options($key, $value);
-			$relationship = $options['relationship'];
+				print_ln('belongs_to: ' . $this->_table . '->' . $foreign_table_name);
+				print_array($row);
 
-			if (in_array($relationship, $this->_temporary_with_tables)) {
-				$model_name = $relationship . '_model';
+				foreach ($primary_key_names as $primary_key_name) {
+					$primary_value  = $this->get_row_value($row, $primary_key_name);
 
-				$this->load->model($options['model'], $model_name);
-				$primary_key_name = $options['primary_key'];
 
-				$relate_value = $this->get_row_value($row, $primary_key_name);
+					print_ln($primary_key_name . '=' . $primary_value);
 
-				// Retrieve all the records which have the relate value
-				$this->{$model_name}->db()->where($primary_key_name, $relate_value);
-				$result = $this->{$model_name}->get();
+					// Retrieve one result which has the given primary value
+					$result = $this->{$model_name}->get($primary_value);
 
-				// Add related result set to existing result set
-				if (is_object($row)) {
-					$row->{$relationship} = $result;
-				} else {
-					$row[$relationship] = $result;
+					print_array($result);
+
+					// Add related result set to existing result set
+					$row = $this->combine_related($row, $result, $foreign_table_name);
 				}
 			}
 		}
 
 		return $row;
+	}
+
+	/**
+	 *
+	 *
+	 * @param array $row
+	 */
+	private function has_many($row) {
+		// Has many
+		foreach ( $this->has_many as $key => $value ) {
+			$options = $this->relate_options($key, $value);
+			$foreign_table_namerelationship = $options['foreign_table_name'];
+
+			if (in_array($foreign_table_namerelationship, $this->_temporary_with_tables)) {
+				$model_name = $foreign_table_namerelationship . '_model';
+
+				$this->load->model($options['model'], $model_name);
+
+				$primary_key_names = $options['primary_key'];
+
+				if (!is_array($primary_key_names)) {
+					$primary_key_names = array($primary_key_names);
+				}
+
+				print_ln('belongs_to: ' . $this->_table . '->' . $foreign_table_namerelationship);
+
+				foreach ($primary_key_names as $primary_key_name) {
+					$relate_value = $this->get_row_value($row, $primary_key_name);
+
+					// Retrieve all the records which have the relate value
+					$this->{$model_name}->db()->where($primary_key_name, $relate_value);
+					$result = $this->{$model_name}->get();
+
+					// Add related result set to existing result set
+					$row = $this->combine_related($row, $result, $foreign_table_namerelationship);
+				}
+			}
+		}
+
+		return $row;
+	}
+
+	/**
+	 *
+	 *
+	 * @param unknown $row
+	 * @param unknown $relationship
+	 * @return unknown
+	 */
+	private function combine_related($row1, $row2, $relationship) {
+
+		if (is_object($row1)) {
+			$row1->{$relationship} = $row2;
+		} else {
+			$row1[$relationship] = $row2;
+		}
+
+
+		return $row1;
 	}
 
 	/**
@@ -446,38 +565,43 @@ class CRUDModel extends CI_Model {
 
 	/**
 	 * Smart setting of the relate-options.
-	 * Default values are set for missing values.
+	 * Default values are set for missing values.<br />
+	 * <br />
+	 * $belongs_to = ['some_foreign_table'=>[]];<br />
+	 * $belongs_to = ['some_foreign_table'=>['foreign_key'=>'some_foreign_key', ...]];<br />
 	 *
-	 * @param string $key
-	 * @param string/array $value
-	 * @param string $defined_options Default options
+	 * @param string $foreign_table_name
+	 * @param array $defined_options
 	 * @return
 	 */
-	protected function relate_options($key, $value, $defined_options = null) {
+	protected function relate_options($foreign_table_name, array $defined_options) {
 		$options = array();
-		$table_name = null;
 
-		if (is_string($value)) {
-			// The relationship is only given as the table name. No options array
-			$table_name = $value;
-		} else {
-			// The key is the table name and the value is the options array
-			$table_name = $key;
-			$defined_options = $value;
-		}
-
-		// Default options
+		// -- Default options --
 
 		//The foreign table name
-		$options['relationship'] = $table_name;
-		//The key in the foreign table which should be matched to the primary key in the current table
-		$options['primary_key'] = singular($this->_table) . '_id';
+		$options['foreign_table_name'] = $foreign_table_name;
+		//The default foreign key is the primary key of the current table. Since there could be multiple
+		//foreign keys, an array is used.
+		$options['foreign_keys'] = [singular($this->_table) . '_id'];
+		//The key of the current table is the primary key
+		$options['local_key'] = $this->primary_key;
+		//Additional where statement to execute on the foreign table
+		$options['foreign_table_where'] = '';
 		//The name of the model (if different from [tablename]_model)
-		$options['model'] = singular($table_name) . '_model';
+		$options['model'] = singular($foreign_table_name) . '_model';
 
-		if ($defined_options != null) {
+		// -- End default options --
+
+
+		if (count($defined_options) > 0) {
 			// Merge with options. Override any existing default options
 			$options = array_merge($options, $defined_options);
+
+			//If there is only one single foreign key given, but not within an array, turn it into an array.
+			if (!is_array($options['foreign_keys'])) {
+				$options['foreign_keys'] = [$options['foreign_keys']];
+			}
 		}
 
 		return $options;
