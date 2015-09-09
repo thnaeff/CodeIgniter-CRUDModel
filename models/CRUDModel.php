@@ -13,6 +13,7 @@ include_once(BASEPATH . 'core/Model.php');
  * - Protected fields/Available fields<br />
  * - Only inserts/updates fields which exist in the table<br />
  * - Return row values as object or array<br />
+ * - Flattened arrays (including multi-dimensional arrays of relationships)<br />
  * <br />
  * <br />
  * <br />
