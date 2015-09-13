@@ -144,6 +144,12 @@ class CRUDModel extends CI_Model {
 								'before_delete'=>NULL,
 								'after_delete'=>NULL);
 
+	/**
+	 * If set to TRUE, all queries are saved in an array
+	 */
+	private $_save_queries = false;
+	private $queries = null;
+
 
 	/**
 	 * Initialise the model, tie into the CodeIgniter superobject and
@@ -208,9 +214,12 @@ class CRUDModel extends CI_Model {
 	}
 
 	/**
-	 * Resets the model so that it is a well defined state
+	 * Resets the model so that it is a well defined state.
+	 * Should be called after each database access like update, delete, get etc.
 	 */
 	public function reset() {
+		$this->save_query();
+
 		$this->database->reset_query();
 		$this->_temporary_with_tables = array();
 		$this->_temporary_flat = false;
@@ -297,15 +306,14 @@ class CRUDModel extends CI_Model {
 		$result = $this->database->get($this->_table)->{$this->get_return_type($multi)}();
 		$result = $this->relate_get($result);
 
-
 		if ($this->_temporary_flat || $this->_temporary_flat_full) {
 			$result = $this->flatten_array($result);
 		}
 
 		$this->reset();
 
-		// Only a modification on $result is re-used
-		$result = $this->trigger('after_get', array($primary_values, $result))[1];
+		//Just return the result array if no callback is called
+		$result = $this->trigger('after_get', array($primary_values, $result), $result);
 
 		return $result;
 	}
@@ -758,9 +766,11 @@ class CRUDModel extends CI_Model {
 	 *        	The event name. This trigger function will call all the event methods registered for that name.
 	 * @param var $data
 	 *        	The data to pass on to the obervers
+	 * @param var $defaultReturn The value to return if no callback function is called. If not
+	 * given or if NULL, the $data is returned if no callback function is called.
 	 * @return The data which might have been modified by one of the observers
 	 */
-	protected function trigger($event, $data = NULL) {
+	protected function trigger($event, $data = NULL, $defaultReturn = NULL) {
 		if (isset($this->events[$event])) {
 
 			$event_array = $this->events[$event];
@@ -777,9 +787,15 @@ class CRUDModel extends CI_Model {
 			} else {
 				$data = call_user_func_array(array($this, $method), array($data));
 			}
+
+			return $data;
 		}
 
-		return $data;
+		if ($defaultReturn != NULL) {
+			return $defaultReturn;
+		} else {
+			return $data;
+		}
 	}
 
 	/**
@@ -839,6 +855,47 @@ class CRUDModel extends CI_Model {
 
 
 		return $array;
+	}
+
+
+	/*----------------------------------------------------------------------------------------
+	 * Query debugging
+	 */
+
+	/**
+	 * Save the last query if saving queries is enabled
+	 *
+	 */
+	private function save_query() {
+		if ($this->_save_queries) {
+			$this->queries[] = $this->database->last_query();
+		}
+	}
+
+	/**
+	 * Turns the saving of queries on or off
+	 *
+	 * @param boolean $save
+	 */
+	public function save_queries($save=true) {
+		$this->_save_queries = $save;
+
+		if (! $save) {
+			$this->queries = null;
+		} else if (count($this->queries) == 0) {
+			//Prepare the array if there are no queries yet
+			$this->queries = array();
+		}
+	}
+
+	/**
+	 * Returns the saved queries.
+	 *
+	 * @return NULL|array If saving queries is enabled, it returns an array with the queries. If
+	 * saving queries is disabled, it returns NULL.
+	 */
+	public function get_queries() {
+		return $this->queries;
 	}
 
 }
