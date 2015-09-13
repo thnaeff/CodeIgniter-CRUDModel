@@ -534,8 +534,9 @@ class CRUDModel extends CI_Model {
 		$this->_temporary_with_tables[] = $related_table;
 
 		if ($return_foreign_model) {
-			$options = $this->relate_options($with_table, $this->related_to[$with_table]);
+			$options = $this->relate_options($related_table, $this->related_to[$related_table]);
 			$this->load->model($options['model'], $options['model'] . '_related');
+			return $this->{$options['model'] . '_related'};
 		} else {
 			return $this;
 		}
