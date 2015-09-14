@@ -829,10 +829,14 @@ class CRUDModel extends CI_Model {
 	function flatten_array(array $array) {
 
 		if (count($array) == 1) {
-			//If there is only one array element, "skip" its parent array
+			//If there is only one array element which itself has an array value,
+			//"skip" its parent array
 			//and just use that one sub-array as root array. This moves the
 			//sub-array one level up
-			$array = reset($array);
+			$arrayValue = reset($array);
+			if (is_array($arrayValue)) {
+				$array = $arrayValue;
+			}
 		}
 
 
@@ -852,7 +856,6 @@ class CRUDModel extends CI_Model {
 			}
 
 		}
-
 
 		return $array;
 	}
