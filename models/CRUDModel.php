@@ -771,7 +771,7 @@ class CRUDModel extends CI_Model {
 	 * @return The data which might have been modified by one of the observers
 	 */
 	protected function trigger($event, $data = NULL, $defaultReturn = NULL) {
-		if (isset($this->events[$event])) {
+		if (isset($this->events[$event]) && ! empty($this->events[$event])) {
 
 			$event_array = $this->events[$event];
 
@@ -791,7 +791,7 @@ class CRUDModel extends CI_Model {
 			return $data;
 		}
 
-		if ($defaultReturn != NULL) {
+		if ($defaultReturn !== NULL) {
 			return $defaultReturn;
 		} else {
 			return $data;
