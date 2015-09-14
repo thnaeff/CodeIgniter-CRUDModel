@@ -318,6 +318,7 @@ class CRUDModel extends CI_Model {
 		return $result;
 	}
 
+
 	/**
 	 * Inserts the given data into the table.
 	 * Can either be a single row (one array element for each field) or multiple rows
@@ -551,12 +552,12 @@ class CRUDModel extends CI_Model {
 	}
 
 	/**
-	 * Returns the row(s) from the related data models, combined with the given row
+	 * Returns the row(s) from the related data models, combined with the given row(s)
 	 *
 	 * @param array $rows
 	 * @return array The resulting row which includes all the relating data
 	 */
-	private function relate_get($rows) {
+	public function relate_get($rows) {
 		if (empty($this->_temporary_with_tables) || empty($rows)) {
 			return $rows;
 		}
@@ -828,7 +829,9 @@ class CRUDModel extends CI_Model {
 	 */
 	function flatten_array(array $array) {
 
-		if (count($array) == 1) {
+		$single = (count($array) <= 1);
+
+		if ($single) {
 			//If there is only one array element which itself has an array value,
 			//"skip" its parent array
 			//and just use that one sub-array as root array. This moves the
@@ -843,7 +846,6 @@ class CRUDModel extends CI_Model {
 		foreach ($array as $array_key=>$array_value) {
 
 			if (is_array($array_value)) {
-				$single = (count($array_value) <= 1);
 				$array_value = $this->flatten_array($array_value);
 
 				//Only do full flattening with single element arrays (or empty arrays)
