@@ -4,13 +4,14 @@ Full CodeIgniter CRUD base for database interactions with
 * function chaining
 * event-based observer system ("before" and "after" triggers)
 * table relations (belongs to, has many)
+* Use output (get result) as input (update/insert/delete), also with relationships
 * protected fields
 * available fields
 * table name guessing
 * flattened arrays (including multi-dimensional arrays of relationships)
 
 This CodeIgniter CRUD model has been created after being inspired by several existing CRUD models (e.g. [avenirers MY_Model](https://github.com/avenirer/CodeIgniter-MY_Model), [jamierumbelows BaseModel](https://github.com/jamierumbelow/codeigniter-base-model) and others). The main characteristic of this model is its simplicity and that it only provides the basic functionality; only one insert, one get, one update and one delete function. Some additional logic (relationships and flattened arrays) is added because of its tight integration into the basic functionality.<br />
-More advanced functionality is carefully selected and kept at a minimum. This simplifies the usability of the model keeps the model clean and clear. Any more specific and less common functions are implemented in the [BaseModel](https://github.com/thnaeff/CodeIgniter-BaseModel) (which extends the `CRUDModel` class) in order to separate basic and extended functionality.<br />
+More advanced functionality is carefully selected and kept at a minimum. This simplifies the usability of the model and keeps the model clean and clear. Any more specific and less common functions are implemented in the [BaseModel](https://github.com/thnaeff/CodeIgniter-BaseModel) (which extends the `CRUDModel` class) in order to separate basic and extended functionality.<br />
 
 
 *Note:* This model is very easy to set up and use, but it also has its limitations. The table name guessing might fails sometimes (can be overwritten by setting the $_table variable directly) and resolving the relationships needs a query for each record and relationship (not as efficient as a direct SQL join for example). However, it is perfect (and a great starting point) for small to medium projects with basic table relations and it can easily be extended.

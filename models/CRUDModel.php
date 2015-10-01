@@ -9,6 +9,7 @@ include_once(BASEPATH . 'core/Model.php');
  * some additional features like:<br />
  * - Function chaining<br />
  * - Simple database table relations (belongs to, has many)<br />
+ * - Use output (get result) as input (update/insert/delete), also with relationships<br />
  * - Event callbacks for simple interaction with queries (before get, after get, before delete, after delete, ...)<br />
  * - Protected fields/Available fields<br />
  * - Only inserts/updates fields which exist in the table<br />
@@ -17,8 +18,9 @@ include_once(BASEPATH . 'core/Model.php');
  * <br />
  * <br />
  * <br />
- * Heavily based on Jamie Rumbelows Base Model (https://github.com/jamierumbelow/codeigniter-base-model),
- * but with some simplification to separate the basic CRUD functionality from more extended functionality.<br />
+ * Initially based on Jamie Rumbelows Base Model (https://github.com/jamierumbelow/codeigniter-base-model),
+ * but with different functionality and separated CRUD functionality from more extended functionality
+ * (see https://github.com/thnaeff/CodeIgniter-BaseModel).<br />
  * <br />
  *
  * @link http://github.com/thnaeff/CodeIgniter-CRUDModel
@@ -26,8 +28,8 @@ include_once(BASEPATH . 'core/Model.php');
  */
 class CRUDModel extends CI_Model {
 	/*
-	 * Code hint: variables starting wit underscore "_" are set internally, variables without
-	 * the underscore are read only and can be set directly if needed.
+	 * Code hint: variables starting wit underscore "_" are set internally and should only be
+	 * changed if documented or really necessary, variables without can be set directly if needed.
 	 */
 
 	/**
@@ -145,7 +147,7 @@ class CRUDModel extends CI_Model {
 								'after_delete'=>NULL);
 
 	/**
-	 * If set to TRUE, all queries are saved in an array
+	 * If set to TRUE, all queries are saved in an array. This can be used to track all querys
 	 */
 	private $_save_queries = false;
 	private $queries = null;
@@ -367,30 +369,33 @@ class CRUDModel extends CI_Model {
 			return FALSE;
 		}
 
-		$row = $this->prepare_write_data($row);
+		$preparedRow = $this->prepare_write_data($row);
 
-		$this->database->insert($this->_table, $row);
+		$this->database->insert($this->_table, $preparedRow);
 		$insert_id = $this->database->insert_id();
 		$this->reset();
 
-		$this->trigger('after_insert', array($row, $insert_id));
+		$this->trigger('after_insert', array($preparedRow, $insert_id));
 
 		return $insert_id;
 	}
 
 	/**
 	 * Updates one/multiple rows in the table with the given row data.
-	 * If no primary key
-	 * value(s) are given, the where-statment has to be defined beforehand on the used database.
+	 * If no primary key value(s) are given, the where-statment has to be defined
+	 * beforehand on the used database.
 	 *
 	 *
 	 * @param array $row
 	 * @param var $primary_values
 	 *        	The primary key value (or an array of values) of the row(s) to update. If omitted/set to
 	 *        	null (default), the updated data is not limited to the primary value and has to be defined
-	 *        	with a where-statement directly on the used DB.
+	 *        	with a where-statement directly on the used DB. Primary values in the row are considered as
+	 *        	well.
 	 */
 	public function update($row, $primary_values = null) {
+		$primary_values = $this->primary_values_from_rows($row, $primary_values);
+
 		$ret = $this->trigger('before_update', array($row, $primary_values));
 		if ($ret === FALSE) {
 			$this->reset();
@@ -400,16 +405,37 @@ class CRUDModel extends CI_Model {
 		$row = $ret[0];
 		$primary_values = $ret[1];
 
+		//Also use the primary keys from the row
+		if (array_key_exists($this->primary_key, $row)) {
+			if (empty($primary_values)) {
+				$primary_values = array();
+			} else if (! is_array($primary_values)) {
+				$primary_values = [$primary_values];
+			}
+
+			$primary_values[] = $row[$this->primary_key];
+			$primary_values = array_unique($primary_values);
+		}
+
 		// Limit to primary key(s) (if provided)
 		$this->set_where($this->primary_key, $primary_values);
 
-		$row = $this->prepare_write_data($row);
+		$preparedRow = $this->prepare_write_data($row);
 
-		$this->database->set($row);
+		$this->database->set($preparedRow);
 		$result = $this->database->update($this->_table);
+
+		//The primary key(s) are needed for resolving relationships
+		if (! empty($primary_values)) {
+			$row[$this->primary_key] = $primary_values;
+		}
+
+		//Call the update method for related tables. Pass on the result for this table.
+		$result = $this->relate_action($row, [$this->_table=>$result], 'update');
+
 		$this->reset();
 
-		$this->trigger('after_update', array($row, $primary_values, $result));
+		$this->trigger('after_update', array($preparedRow, $primary_values, $result));
 
 		return $result;
 	}
@@ -422,10 +448,19 @@ class CRUDModel extends CI_Model {
 	 *        	The primary key value (or an array of values) of the row(s) to delete. If omitted/set to
 	 *        	null (default), the deleted data is not limited to the primary value and has to be defined
 	 *        	with a where-statement directly on the used DB.
+	 * @param array $row
+	 * 			The row with the primary key of the record which should get
+	 * 			deleted. This gives the possibility to specify the row to delete in the format of
+	 * 			a get call result and it allows to combine the delete with related tables. A
+	 * 			combination of $primary_values and $row is allowed.
 	 * @return var/boolean Returns the query result as array/object, or FALSE if the execution got
 	 *         interrupted by an event.
 	 */
-	public function delete($primary_values = null) {
+	public function delete($primary_values = null, $rows = null) {
+		if ($rows != null) {
+			$primary_values = $this->primary_values_from_rows($rows, $primary_values);
+		}
+
 		$primary_values = $this->trigger('before_delete', $primary_values);
 		if ($primary_values === FALSE) {
 			$this->reset();
@@ -434,8 +469,16 @@ class CRUDModel extends CI_Model {
 
 		// Limit to primary key(s) (if provided)
 		$this->set_where($this->primary_key, $primary_values);
-
 		$result = $this->database->delete($this->_table);
+
+		//The primary key(s) are needed for resolving any relationships
+		if (! empty($primary_values)) {
+			$rows[$this->primary_key] = $primary_values;
+		}
+
+		//Call the update method for related tables. Pass on the result for this table.
+		$result = $this->relate_action($rows, [$this->_table=>$result], 'delete');
+
 		$this->reset();
 
 		$this->trigger('after_delete', array($primary_values, $result));
@@ -509,7 +552,8 @@ class CRUDModel extends CI_Model {
 	 * @param string $flat TRUE (default) flattens the retrieved data for arrays/objects which only
 	 * have one array element. FALSE keeps the data as retrieved (one array/object per record).
 	 * @param string $full TRUE also flattens sub-arrays (relationship data) to the level of the main array.
-	 * FALSE (default) keeps relationship data in its sub-array.
+	 * FALSE (default) keeps relationship data in its sub-array. Warning: sub-arrays are merged with their
+	 * parent arrays, which results in parent key-value pairs being overwritten with matching sub-array key-value pairs.
 	 */
 	public function flat($flat = TRUE, $full = FALSE) {
 		$this->_temporary_flat = $flat;
@@ -524,10 +568,10 @@ class CRUDModel extends CI_Model {
 	 */
 
 	/**
-	 * Sets the given table to be retrieved in the same result set. The table has to be defined
+	 * Sets the given table/model to be retrieved in the same result set. The table has to be defined
 	 * previously as related_to relationship
 	 *
-	 * @param string $related_table
+	 * @param string $related_table The table/model name in plural (e.g. "profiles" for the "profiles" table and "Profile_model" model)
 	 * @param boolean $return_foreign_model Default: FALSE. If set to TRUE, this method returns the foreign model
 	 * instead of the current model. This can be useful if the foreign table model needs additional
 	 * configuration to the provided relationship options.
@@ -544,8 +588,7 @@ class CRUDModel extends CI_Model {
 
 		if ($return_foreign_model) {
 			$options = $this->relate_options($related_table, $this->related_to[$related_table]);
-			$this->load->model($options['model'], $options['model'] . '_related');
-			return $this->{$options['model'] . '_related'};
+			return $this->load_related_model($options['model']);
 		} else {
 			return $this;
 		}
@@ -557,9 +600,27 @@ class CRUDModel extends CI_Model {
 	 * @param array $rows
 	 * @return array The resulting row which includes all the relating data
 	 */
-	public function relate_get($rows) {
+	private function relate_get($rows) {
+		return $this->relate_action($rows, null, 'get');
+	}
+
+	/**
+	 * The entry point for all relationship resolving. Calls the needed get/update/delete function.
+	 *
+	 *
+	 * @param array $rows An array with key-value pairs of one single orw or multiple sub-arrays for
+	 * multiple rows.
+	 * @param array $results If the result(s) of the database actions should be returned instead
+	 * of row data, provide an array here.
+	 * @param String $action A string which defines the action to use (get/insert/update/delete)
+	 */
+	private function relate_action($rows, $results, $action) {
 		if (empty($this->_temporary_with_tables) || empty($rows)) {
-			return $rows;
+			if ($results != null) {
+				return $results;
+			} else {
+				return $rows;
+			}
 		}
 
 		//Get data from each related table
@@ -569,24 +630,103 @@ class CRUDModel extends CI_Model {
 
 			//Loads the model with a special name so that "self" relationships are possible
 			//(a model can have a relationship to itself)
-			$this->load->model($model_name, $model_name . '_related');
+			$this->load_related_model($model_name);
 
 			//Array of [local_key=>foreign_key(s)] or simply [foreign_key(s)]
 			$related_keys = $options['related_keys'];
 
-			foreach ($rows as $row_key=>$row) {
-				$this->related_or_where($row, $with_table, $model_name, $related_keys);
-				$result = $this->{$model_name . '_related'}->get();
-				$rows[$row_key] = $this->combine_related($row, $result, $with_table);
+			switch ($action) {
+				case 'get':
+					$rows = $this->relate_action_get($rows, $with_table, $model_name, $related_keys);
+					break;
+				case 'update':
+					$results[$with_table] = $this->relate_action_update($rows, $results, $with_table, $model_name, $related_keys);
+					break;
+				case 'delete':
+					$results[$with_table] = $this->relate_action_delete($rows, $results, $with_table, $model_name, $related_keys);
+					break;
+				default:
+					throw new Exception('Invalid action "' . $action . '"');
+					break;
 			}
+
+		}
+
+		if ($results != null) {
+			return $results;
+		} else {
+			return $rows;
+		}
+	}
+
+
+	/**
+	 * get
+	 *
+	 * @param unknown $rows
+	 * @param unknown $with_table
+	 * @param unknown $model_name
+	 * @param unknown $related_keys
+	 */
+	private function relate_action_get($rows, $with_table, $model_name, $related_keys) {
+
+		//Retrieve related data for each row
+		foreach ($rows as $row_key=>$row) {
+			$this->related_or_where($row, $with_table, $model_name, $related_keys);
+			$result = $this->{$model_name . '_related'}->get();
+			$rows[$row_key] = $this->combine_related($row, $result, $with_table);
 		}
 
 		return $rows;
 	}
 
 	/**
-	 * Sets the where clause on the related object, using all the related keys, connected
-	 * with OR. <br />
+	 * update
+	 *
+	 * @param unknown $rows
+	 * @param unknown $with_table
+	 * @param unknown $model_name
+	 * @param unknown $related_keys
+	 */
+	private function relate_action_update($row, $results, $with_table, $model_name, $related_keys) {
+		if (! array_key_exists($with_table, $row)) {
+			//No data for the sub-table exists in the row
+			return false;
+		}
+
+		$this->related_or_where($row, $with_table, $model_name, $related_keys);
+
+		$results = $this->{$model_name . '_related'}->update($row[$with_table]);
+
+		//Only return the result of this update (and its related updates)
+		return $results[$this->{$model_name . '_related'}->table()];
+	}
+
+	/**
+	 * delete
+	 *
+	 * @param unknown $rows
+	 * @param unknown $with_table
+	 * @param unknown $model_name
+	 * @param unknown $related_keys
+	 */
+	private function relate_action_delete($row, $results, $with_table, $model_name, $related_keys) {
+		if (! array_key_exists($with_table, $row)) {
+			//No data for the sub-table exists in the row
+			return false;
+		}
+
+		$this->related_or_where($row, $with_table, $model_name, $related_keys);
+
+		$results = $this->{$model_name . '_related'}->delete();
+
+		//Only return the result of this update (and its related updates)
+		return $results[$this->{$model_name . '_related'}->table()];
+	}
+
+	/**
+	 * Sets the where clause on the related model, using all the related keys (connected
+	 * with OR). <br />
 	 * <br />
 	 * HAS_MANY relationship (1:n or n:n)<br />
 	 * BELONGS_TO relationship (1:1 or n:1)<br />
@@ -616,11 +756,22 @@ class CRUDModel extends CI_Model {
 				$foreign_keys = [$foreign_keys];
 			}
 
+			//Check if the needed keys are present to resolve the relationship
+			if (! $this->row_key_exists($row, $local_key)) {
+				//$this->printRelationship();
+				throw new Exception('Trying to resolve relationship ' . $this->_table . '->' . $with_table . '.
+										Key "' . $local_key . '" not found in local (' . $this->_table . ') row data.');
+			}
+
 			$local_value = $this->get_row_value($row, $local_key);
 
 			foreach ($foreign_keys as $foreign_key) {
 				//OR where
-				$this->{$model_name . '_related'}->db()->or_where($foreign_key, $local_value);
+				if (is_array($local_value)) {
+					$this->{$model_name . '_related'}->db()->or_where_in($foreign_key, $local_value);
+				} else {
+					$this->{$model_name . '_related'}->db()->or_where($foreign_key, $local_value);
+				}
 			}
 
 		}
@@ -647,19 +798,6 @@ class CRUDModel extends CI_Model {
 		return $row;
 	}
 
-	/**
-	 * Helper function to retrieve the row value from either a row-object or a row-array
-	 *
-	 * @param array/object $row
-	 * @param string $key
-	 */
-	protected function get_row_value($row, $key) {
-		if (is_object($row)) {
-			return $row->{$key};
-		} else {
-			return $row[$key];
-		}
-	}
 
 	/**
 	 * Smart setting of the relate-options.
@@ -710,9 +848,13 @@ class CRUDModel extends CI_Model {
 	 * - Removes any protected fields
 	 * - Only keeps fields which exist in the table
 	 */
-	private function prepare_write_data($row) {
+	protected function prepare_write_data($row) {
 		// Unset all protected fields
 		foreach ( $this->protected_fields as $field ) {
+			if (! $this->row_key_exists($row, $field)) {
+				continue;
+			}
+
 			if (is_object($row)) {
 				// For data objects
 				unset($row->$field);
@@ -724,7 +866,7 @@ class CRUDModel extends CI_Model {
 
 		if ($this->table_fields != NULL) {
 			// Only keep existing fields
-			foreach ( $row as $fieldName => $fieldValue ) {
+			foreach ( $row as $fieldName => &$fieldValue ) {
 				if (! in_array($fieldName, $this->table_fields)) {
 					if (is_object($row)) {
 						// For data objects
@@ -757,6 +899,89 @@ class CRUDModel extends CI_Model {
 				$this->database->where_in($key, $value);
 			}
 		}
+	}
+
+	/**
+	 * Helper function to retrieve the row value from either a row-object or a row-array
+	 *
+	 * @param array/object $row
+	 * @param string $key
+	 */
+	protected function get_row_value($row, $key) {
+		if (is_object($row)) {
+			return $row->{$key};
+		} else {
+			return $row[$key];
+		}
+	}
+
+	/**
+	 * Checks if the key/variable exists in the row object/array
+	 *
+	 * @param object/array $row
+	 * @param string $key
+	 */
+	protected function row_key_exists($row, $key) {
+		if (is_object($row)) {
+			return property_exists($row, $key);
+		} else {
+			return array_key_exists($key, $row);
+		}
+	}
+
+	/**
+	 * Checks the rows if the primary key is present. If yes, the value
+	 * is used as primary value and combined with the $primary_values
+	 * parameter. The $rows parameter can eiter be a single row (with all its
+	 * key-value pairs) or a multi-row array.
+	 *
+	 * @param array $rows
+	 * @param var $primary_values
+	 * @param boolean $is_row A flag to indicate that the function has been
+	 * called from within itself and that it is known already that the $rows
+	 * parameter is a single row.
+	 * @return array An array of all primary values
+	 */
+	private function primary_values_from_rows($rows, $primary_values, $is_row = false) {
+		//Is it a single row or are there multiple rows?
+		if (($is_row && array_key_exists($this->primary_key, $rows))
+				|| array_key_exists($this->primary_key, $rows)) {
+					//Must be a single row, because the primary key has been found in it
+
+					//The primary key is in the row. Use it for the where statement
+					$value = $rows[$this->primary_key];
+
+					if (empty($primary_values)) {
+						$primary_values = array();
+					} else if (! is_array($primary_values)) {
+						$primary_values = [$primary_values];
+					}
+
+					if (is_array($value)) {
+						$primary_values = array_merge($primary_values, $value);
+					} else {
+						$primary_values[] = $value;
+					}
+
+					$primary_values = array_unique($primary_values);
+				} else {
+					//Might be an array with multiple rows.
+
+					foreach ($rows as $row) {
+						if (! is_array($row)) {
+							//Stop as soon as there is an element encountered which is not an array.
+							//This means that the primary key has not been found and the provided
+							//array is not a multi-row array. No primary keys to take care of then.
+							break;
+						}
+
+						//Combine the primary keys of all the rows. It is already known
+						//now that it is a single row.
+						$this->primary_values_from_rows($row, $primary_values, true);
+					}
+				}
+
+				return $primary_values;
 	}
 
 	/**
@@ -811,10 +1036,6 @@ class CRUDModel extends CI_Model {
 		// The whole result (one or more rows) or just the first row
 		$method = 'result';
 
-// 		if (($this->_temporary_flat || $this->_temporary_flat_full) && ! $multi) {
-// 			$method = 'row';
-// 		}
-
 		// result_array/row_array or result/row
 		$return_type = $this->return_type == 'array' ? $method . '_array' : $method;
 
@@ -827,8 +1048,7 @@ class CRUDModel extends CI_Model {
 	 *
 	 * @param array $array
 	 */
-	function flatten_array(array $array) {
-
+	private function flatten_array(array $array) {
 		$single = (count($array) <= 1);
 
 		if ($single) {
@@ -842,10 +1062,11 @@ class CRUDModel extends CI_Model {
 			}
 		}
 
-
+		//Check if there are any sub-arrays
 		foreach ($array as $array_key=>$array_value) {
 
 			if (is_array($array_value)) {
+				$single = (count($array_value) <= 1);
 				$array_value = $this->flatten_array($array_value);
 
 				//Only do full flattening with single element arrays (or empty arrays)
@@ -855,6 +1076,7 @@ class CRUDModel extends CI_Model {
 				} else {
 					$array[$array_key] = $array_value;
 				}
+
 			}
 
 		}
@@ -862,9 +1084,24 @@ class CRUDModel extends CI_Model {
 		return $array;
 	}
 
+	/**
+	 *
+	 *
+	 * @param unknown $modelName
+	 */
+	private function load_related_model($modelName) {
+		$related = $modelName . '_related';
+		$this->load->model($modelName, $related);
+
+		//Also save queries in related models if set for this model
+		$this->{$related}->save_queries($this->_save_queries);
+
+		return $this->{$related};
+	}
+
 
 	/*----------------------------------------------------------------------------------------
-	 * Query debugging
+	 * Query and relationship info
 	 */
 
 	/**
@@ -901,6 +1138,62 @@ class CRUDModel extends CI_Model {
 	 */
 	public function get_queries() {
 		return $this->queries;
+	}
+
+	/**
+	 * Prints the relationship of this table with other tables
+	 *
+	 */
+	public function printRelationship() {
+		$text = print_ln('<b><u>Table: ' . $this->_table . ' (' . get_class($this) . ')</u></b>', true);
+		$text .= print_ln('', true);
+
+		$count = 1;
+		foreach ($this->related_to as $table=>$options) {
+			$modelName = (isset($options['model']) ? $options['model'] : ucfirst(singular($table)) . '_model');
+
+			$text .= print_array('<b><i>Relationship ' . $count . ':</i></b>', $options, ['model', 'related_keys'], [], true);
+
+			$text .= print_ln('<u>Related to:</u> ' . $table . ' (' . $modelName . ')', true);
+			$text .= print_ln('Related keys (as <i>local_key</i>=><i>foreign_key</i> or <i>local_key</i>=>[<i>foreign_keys</i>]):', true);
+
+			if (!isset($options['related_keys'])) {
+				$options['related_keys'] = [null=>null];
+			}
+
+			foreach ($options['related_keys'] as $local_key=>$foreign_keys) {
+				$foreignKeys = null;
+				$infoString = ' (';
+
+				if ($local_key === '' || !is_string($local_key)) {
+					$local_key = $this->primary_key;
+					$infoString .= ' Local key was not provided. Using local primary key defined in ' . get_class($this) . ' instead.';
+				}
+
+				if ($foreign_keys === NULL) {
+					$model = $this->load_related_model($modelName);
+					$foreign_keys = $model->primary_key();
+					$infoString .= ' Foreign key was not provided (NULL). Using foreign primary key defined in ' . $modelName . ' instead.';
+				}
+
+				$infoString .= ')';
+
+				if (is_array($foreign_keys)) {
+					$foreignKeys = '[' . implode(' OR ', $foreign_keys) . ']';
+				} else {
+					$foreignKeys = $foreign_keys;
+				}
+
+				$text .= print_ln('Local key <i>' . $local_key . '</i> related to foreign key <i>' . $foreignKeys . '</i>' . $infoString, true);
+			}
+
+			$text .= print_ln('', true);
+
+			$count++;
+		}
+
+		return $text;
+
 	}
 
 }
