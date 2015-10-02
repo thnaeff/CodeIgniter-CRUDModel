@@ -457,9 +457,7 @@ class CRUDModel extends CI_Model {
 	 *         interrupted by an event.
 	 */
 	public function delete($primary_values = null, $rows = null) {
-		if ($rows != null) {
-			$primary_values = $this->primary_values_from_rows($rows, $primary_values);
-		}
+		$primary_values = $this->primary_values_from_rows($rows, $primary_values);
 
 		$primary_values = $this->trigger('before_delete', $primary_values);
 		if ($primary_values === FALSE) {
@@ -595,12 +593,14 @@ class CRUDModel extends CI_Model {
 	}
 
 	/**
-	 * Returns the row(s) from the related data models, combined with the given row(s)
+	 * Returns the row(s) from the related data models, combined with the given row(s). This can be
+	 * used to fetch related rows after a previous get call or with existing row data.
 	 *
-	 * @param array $rows
-	 * @return array The resulting row which includes all the relating data
+	 * @param array $rows The rows from which the relationship values should be taken
+	 * and to which the data of the related tables will be added.
+	 * @return array The resulting row which includes all the data of the related tables data
 	 */
-	private function relate_get($rows) {
+	public function relate_get($rows) {
 		return $this->relate_action($rows, null, 'get');
 	}
 
@@ -942,46 +942,50 @@ class CRUDModel extends CI_Model {
 	 * parameter is a single row.
 	 * @return array An array of all primary values
 	 */
-	private function primary_values_from_rows($rows, $primary_values, $is_row = false) {
+	protected function primary_values_from_rows($rows, $primary_values, $is_row = false) {
+		if ($rows == null) {
+			return $primary_values;
+		}
+
 		//Is it a single row or are there multiple rows?
 		if (($is_row && array_key_exists($this->primary_key, $rows))
 				|| array_key_exists($this->primary_key, $rows)) {
-					//Must be a single row, because the primary key has been found in it
+			//Must be a single row, because the primary key has been found in it
 
-					//The primary key is in the row. Use it for the where statement
-					$value = $rows[$this->primary_key];
+			//The primary key is in the row. Use it for the where statement
+			$value = $rows[$this->primary_key];
 
-					if (empty($primary_values)) {
-						$primary_values = array();
-					} else if (! is_array($primary_values)) {
-						$primary_values = [$primary_values];
-					}
+			if (empty($primary_values)) {
+				$primary_values = array();
+			} else if (! is_array($primary_values)) {
+				$primary_values = [$primary_values];
+			}
 
-					if (is_array($value)) {
-						$primary_values = array_merge($primary_values, $value);
-					} else {
-						$primary_values[] = $value;
-					}
+			if (is_array($value)) {
+				$primary_values = array_merge($primary_values, $value);
+			} else {
+				$primary_values[] = $value;
+			}
 
-					$primary_values = array_unique($primary_values);
-				} else {
-					//Might be an array with multiple rows.
+			$primary_values = array_unique($primary_values);
+		} else {
+			//Might be an array with multiple rows.
 
-					foreach ($rows as $row) {
-						if (! is_array($row)) {
-							//Stop as soon as there is an element encountered which is not an array.
-							//This means that the primary key has not been found and the provided
-							//array is not a multi-row array. No primary keys to take care of then.
-							break;
-						}
-
-						//Combine the primary keys of all the rows. It is already known
-						//now that it is a single row.
-						$this->primary_values_from_rows($row, $primary_values, true);
-					}
+			foreach ($rows as $row) {
+				if (! is_array($row)) {
+					//Stop as soon as there is an element encountered which is not an array.
+					//This means that the primary key has not been found and the provided
+					//array is not a multi-row array. No primary keys to take care of then.
+					break;
 				}
 
-				return $primary_values;
+				//Combine the primary keys of all the rows. It is already known
+				//now that it is a single row.
+				$this->primary_values_from_rows($row, $primary_values, true);
+			}
+		}
+
+		return $primary_values;
 	}
 
 	/**
@@ -1089,7 +1093,7 @@ class CRUDModel extends CI_Model {
 	 *
 	 * @param unknown $modelName
 	 */
-	private function load_related_model($modelName) {
+	protected function load_related_model($modelName) {
 		$related = $modelName . '_related';
 		$this->load->model($modelName, $related);
 
