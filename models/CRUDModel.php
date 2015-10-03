@@ -220,8 +220,6 @@ class CRUDModel extends CI_Model {
 	 * Should be called after each database access like update, delete, get etc.
 	 */
 	public function reset() {
-		$this->save_query();
-
 		$this->database->reset_query();
 		$this->_temporary_with_tables = array();
 		$this->_temporary_flat = false;
@@ -234,6 +232,7 @@ class CRUDModel extends CI_Model {
 	 */
 	public function update_table_fields() {
 		$this->table_fields = $this->database->list_fields($this->_table);
+		$this->save_query();
 	}
 
 	/**
@@ -306,6 +305,8 @@ class CRUDModel extends CI_Model {
 		$multi = ($primary_values == NULL || is_array($primary_values));
 
 		$result = $this->database->get($this->_table)->{$this->get_return_type($multi)}();
+		$this->save_query();
+
 		$result = $this->relate_get($result);
 
 		if ($this->_temporary_flat || $this->_temporary_flat_full) {
@@ -372,6 +373,7 @@ class CRUDModel extends CI_Model {
 		$preparedRow = $this->prepare_write_data($row);
 
 		$this->database->insert($this->_table, $preparedRow);
+		$this->save_query();
 		$insert_id = $this->database->insert_id();
 		$this->reset();
 
@@ -424,6 +426,7 @@ class CRUDModel extends CI_Model {
 
 		$this->database->set($preparedRow);
 		$result = $this->database->update($this->_table);
+		$this->save_query();
 
 		//The primary key(s) are needed for resolving relationships
 		if (! empty($primary_values)) {
@@ -468,6 +471,7 @@ class CRUDModel extends CI_Model {
 		// Limit to primary key(s) (if provided)
 		$this->set_where($this->primary_key, $primary_values);
 		$result = $this->database->delete($this->_table);
+		$this->save_query();
 
 		//The primary key(s) are needed for resolving any relationships
 		if (! empty($primary_values)) {
@@ -674,6 +678,8 @@ class CRUDModel extends CI_Model {
 		foreach ($rows as $row_key=>$row) {
 			$this->related_or_where($row, $with_table, $model_name, $related_keys);
 			$result = $this->{$model_name . '_related'}->get();
+			$this->save_related_query();
+
 			$rows[$row_key] = $this->combine_related($row, $result, $with_table);
 		}
 
@@ -697,6 +703,7 @@ class CRUDModel extends CI_Model {
 		$this->related_or_where($row, $with_table, $model_name, $related_keys);
 
 		$results = $this->{$model_name . '_related'}->update($row[$with_table]);
+		$this->save_related_query();
 
 		//Only return the result of this update (and its related updates)
 		return $results[$this->{$model_name . '_related'}->table()];
@@ -719,6 +726,7 @@ class CRUDModel extends CI_Model {
 		$this->related_or_where($row, $with_table, $model_name, $related_keys);
 
 		$results = $this->{$model_name . '_related'}->delete();
+		$this->save_related_query();
 
 		//Only return the result of this update (and its related updates)
 		return $results[$this->{$model_name . '_related'}->table()];
@@ -847,36 +855,16 @@ class CRUDModel extends CI_Model {
 	 * Prepares the data for insert/update functions
 	 * - Removes any protected fields
 	 * - Only keeps fields which exist in the table
+	 *
+	 * @param array $row
 	 */
-	protected function prepare_write_data($row) {
-		// Unset all protected fields
-		foreach ( $this->protected_fields as $field ) {
-			if (! $this->row_key_exists($row, $field)) {
-				continue;
-			}
-
-			if (is_object($row)) {
-				// For data objects
-				unset($row->$field);
-			} else {
-				// For data arrays
-				unset($row[$field]);
-			}
-		}
+	protected function prepare_write_data(array $row) {
+		// Remove all protected fields
+		$row = array_diff_key($row, array_flip($this->protected_fields));
 
 		if ($this->table_fields != NULL) {
 			// Only keep existing fields
-			foreach ( $row as $fieldName => &$fieldValue ) {
-				if (! in_array($fieldName, $this->table_fields)) {
-					if (is_object($row)) {
-						// For data objects
-						unset($row->$fieldName);
-					} else {
-						// For data arrays
-						unset($row[$fieldName]);
-					}
-				}
-			}
+			$row = array_intersect_key($row, array_flip($this->table_fields));
 		}
 
 		return $row;
@@ -1112,17 +1100,25 @@ class CRUDModel extends CI_Model {
 	 * Save the last query if saving queries is enabled
 	 *
 	 */
-	private function save_query() {
+	protected function save_query() {
 		if ($this->_save_queries) {
 			$this->queries[] = $this->database->last_query();
+		}
+	}
 
-			//Also save all queries from related models
+	/**
+	 * Get the queries form related models as well if saving queries is enabled
+	 *
+	 */
+	protected function save_related_query() {
+		if ($this->_save_queries) {
 			foreach ($this->_temporary_with_tables as $with_table) {
 				$modelName = singular($with_table) . '_model';
 				$model = $this->load_related_model($modelName);
-				$related = $model->db()->last_query();
 
-				$this->queries[$modelName] = $related;
+				//Get queries from related model and delete them from there
+				$queries = $model->get_queries(true);
+				$this->queries[$modelName][] = $queries;
 			}
 		}
 	}
