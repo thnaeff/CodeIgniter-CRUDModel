@@ -1115,6 +1115,15 @@ class CRUDModel extends CI_Model {
 	private function save_query() {
 		if ($this->_save_queries) {
 			$this->queries[] = $this->database->last_query();
+
+			//Also save all queries from related models
+			foreach ($this->_temporary_with_tables as $with_table) {
+				$modelName = singular($with_table) . '_model';
+				$model = $this->load_related_model($modelName);
+				$related = $model->db()->last_query();
+
+				$this->queries[$modelName] = $related;
+			}
 		}
 	}
 
@@ -1137,11 +1146,19 @@ class CRUDModel extends CI_Model {
 	/**
 	 * Returns the saved queries.
 	 *
+	 * @param boolean $reset If TRUE (default), the saved queries are cleared directly. If FALSE,
+	 * the queries are kept in memory.
 	 * @return NULL|array If saving queries is enabled, it returns an array with the queries. If
 	 * saving queries is disabled, it returns NULL.
 	 */
-	public function get_queries() {
-		return $this->queries;
+	public function get_queries($reset=true) {
+		$queries = $this->queries;
+
+		if ($reset) {
+			$this->queries = array();
+		}
+
+		return $queries;
 	}
 
 	/**
