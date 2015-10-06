@@ -678,7 +678,7 @@ class CRUDModel extends CI_Model {
 		foreach ($rows as $row_key=>$row) {
 			$this->related_or_where($row, $with_table, $model_name, $related_keys);
 			$result = $this->{$model_name . '_related'}->get();
-			$this->save_related_query();
+			$this->save_related_query($model_name . '_related');
 
 			$rows[$row_key] = $this->combine_related($row, $result, $with_table);
 		}
@@ -703,7 +703,7 @@ class CRUDModel extends CI_Model {
 		$this->related_or_where($row, $with_table, $model_name, $related_keys);
 
 		$results = $this->{$model_name . '_related'}->update($row[$with_table]);
-		$this->save_related_query();
+		$this->save_related_query($model_name . '_related');
 
 		//Only return the result of this update (and its related updates)
 		return $results[$this->{$model_name . '_related'}->table()];
@@ -726,7 +726,7 @@ class CRUDModel extends CI_Model {
 		$this->related_or_where($row, $with_table, $model_name, $related_keys);
 
 		$results = $this->{$model_name . '_related'}->delete();
-		$this->save_related_query();
+		$this->save_related_query($model_name . '_related');
 
 		//Only return the result of this update (and its related updates)
 		return $results[$this->{$model_name . '_related'}->table()];
@@ -1110,16 +1110,11 @@ class CRUDModel extends CI_Model {
 	 * Get the queries form related models as well if saving queries is enabled
 	 *
 	 */
-	protected function save_related_query() {
+	protected function save_related_query($related_model_name) {
 		if ($this->_save_queries) {
-			foreach ($this->_temporary_with_tables as $with_table) {
-				$modelName = singular($with_table) . '_model';
-				$model = $this->load_related_model($modelName);
-
-				//Get queries from related model and delete them from there
-				$queries = $model->get_queries(true);
-				$this->queries[$modelName][] = $queries;
-			}
+			//Get queries from related model and delete them from there
+			$queries = $this->{$related_model_name}->get_queries(true);
+			$this->queries[$related_model_name][] = $queries;
 		}
 	}
 
