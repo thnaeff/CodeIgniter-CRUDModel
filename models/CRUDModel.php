@@ -309,10 +309,6 @@ class CRUDModel extends CI_Model {
 
 		$result = $this->relate_get($result);
 
-		if ($this->_temporary_flat || $this->_temporary_flat_full) {
-			$result = $this->flatten_array($result);
-		}
-
 		$this->reset();
 
 		//Just return the result array if no callback is called
@@ -577,6 +573,7 @@ class CRUDModel extends CI_Model {
 	 * @param boolean $return_foreign_model Default: FALSE. If set to TRUE, this method returns the foreign model
 	 * instead of the current model. This can be useful if the foreign table model needs additional
 	 * configuration to the provided relationship options.
+	 * @throws Exception If the related table name is not defined in the model relationships
 	 */
 	public function with($related_table, $return_foreign_model=false) {
 		//Checks it the table name exists as key in related_to
@@ -601,11 +598,18 @@ class CRUDModel extends CI_Model {
 	 * used to fetch related rows after a previous get call or with existing row data.
 	 *
 	 * @param array $rows The rows from which the relationship values should be taken
-	 * and to which the data of the related tables will be added.
+	 * and to which the data of the related tables will be added. This has to be an unflattened array,
+	 * with each row as one array element.
 	 * @return array The resulting row which includes all the data of the related tables data
 	 */
 	public function relate_get($rows) {
-		return $this->relate_action($rows, null, 'get');
+		$result = $this->relate_action($rows, null, 'get');
+
+		if ($this->_temporary_flat || $this->_temporary_flat_full) {
+			$result = $this->flatten_array($result);
+		}
+
+		return $result;
 	}
 
 	/**
@@ -1114,7 +1118,11 @@ class CRUDModel extends CI_Model {
 		if ($this->_save_queries) {
 			//Get queries from related model and delete them from there
 			$queries = $this->{$related_model_name}->get_queries(true);
-			$this->queries[$related_model_name][] = $queries;
+			if (isset($this->queries[$related_model_name])) {
+				$this->queries[$related_model_name] = array_merge($this->queries[$related_model_name], $queries);
+			} else {
+				$this->queries[$related_model_name] = $queries;
+			}
 		}
 	}
 
