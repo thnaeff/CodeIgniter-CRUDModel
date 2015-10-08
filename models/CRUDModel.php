@@ -605,7 +605,8 @@ class CRUDModel extends CI_Model {
 	public function relate_get($rows) {
 		$result = $this->relate_action($rows, null, 'get');
 
-		if ($this->_temporary_flat || $this->_temporary_flat_full) {
+		if ($this->_temporary_flat
+				|| ($this->_temporary_flat && $this->_temporary_flat_full)) {
 			$result = $this->flatten_array($result);
 		}
 
