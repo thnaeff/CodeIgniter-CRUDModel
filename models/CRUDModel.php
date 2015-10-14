@@ -610,6 +610,8 @@ class CRUDModel extends CI_Model {
 			$result = $this->flatten_array($result);
 		}
 
+		$this->reset();
+
 		return $result;
 	}
 
