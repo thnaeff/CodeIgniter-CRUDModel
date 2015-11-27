@@ -9,6 +9,7 @@ Full CodeIgniter CRUD base for database interactions with
 * available fields
 * table name guessing
 * flattened arrays (including multi-dimensional arrays of relationships)
+* Simple pagination support
 
 This CodeIgniter CRUD model has been created after being inspired by several existing CRUD models (e.g. [avenirers MY_Model](https://github.com/avenirer/CodeIgniter-MY_Model), [jamierumbelows BaseModel](https://github.com/jamierumbelow/codeigniter-base-model) and others). The main characteristic of this model is its simplicity and that it only provides the basic functionality; only one insert, one get, one update and one delete function. Some additional logic (relationships and flattened arrays) is added because of its tight integration into the basic functionality.<br />
 More advanced functionality is carefully selected and kept at a minimum. This simplifies the usability of the model and keeps the model clean and clear. Any more specific and less common functions are implemented in the [BaseModel](https://github.com/thnaeff/CodeIgniter-BaseModel) (which extends the `CRUDModel` class) in order to separate basic and extended functionality.<br />

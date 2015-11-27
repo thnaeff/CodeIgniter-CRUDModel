@@ -15,6 +15,7 @@ include_once(BASEPATH . 'core/Model.php');
  * - Only inserts/updates fields which exist in the table<br />
  * - Return row values as object or array<br />
  * - Flattened arrays (including multi-dimensional arrays of relationships)<br />
+ * - Simple pagination support (limit, offset and number of total rows across al pages)<br />
  * <br />
  * <br />
  * <br />
@@ -152,6 +153,13 @@ class CRUDModel extends CI_Model {
 	private $_save_queries = false;
 	private $queries = null;
 
+	/**
+	 * The total number of records from the last get() call. This is either the number of returned
+	 * records or if a limit has been used for the get() call, the number of returned records might
+	 * be lower than the total possible records.
+	 */
+	private $_total_records_count = 0;
+
 
 	/**
 	 * Initialise the model, tie into the CodeIgniter superobject and
@@ -220,7 +228,11 @@ class CRUDModel extends CI_Model {
 	 * Should be called after each database access like update, delete, get etc.
 	 */
 	public function reset() {
-		$this->database->reset_query();
+		if ($this->database != null) {
+			//Database might be null when reset is called from constructor
+			$this->database->reset_query();
+		}
+
 		$this->_temporary_with_tables = array();
 		$this->_temporary_flat = false;
 		$this->_temporary_flat_full = false;
@@ -288,10 +300,12 @@ class CRUDModel extends CI_Model {
 	 *        	The primary key value (or an array of values) of the row(s) to return. If omitted/set to
 	 *        	null (default), the fetched data is not limited to the primary value and can be defined
 	 *        	with a where-statement directly on the used DB.
+	 * @param int $limit Limit the number of records to return
+	 * @param int $offset The offset of the first record (in combination with limit)
 	 * @return var/boolean Returns the query result as array/object, or FALSE if the execution got
 	 *         interrupted by an event.
 	 */
-	public function get($primary_values = null) {
+	public function get($primary_values = null, $limit=0, $offset=0) {
 		$primary_values = $this->trigger('before_get', $primary_values);
 		if ($primary_values === FALSE) {
 			$this->reset();
@@ -301,11 +315,24 @@ class CRUDModel extends CI_Model {
 		// Limit to primary key(s) (if provided)
 		$this->set_where($this->primary_key, $primary_values);
 
+		if ($limit > 0) {
+			//Count the total number of records before the limit statement is used
+			$this->_total_records_count = $this->database->count_all_results($this->_table, false);
+			$this->database->limit($limit, $offset);
+		}
+
 		// Multiple rows expected, or just a single row?
 		$multi = ($primary_values == NULL || is_array($primary_values));
 
-		$result = $this->database->get($this->_table)->{$this->get_return_type($multi)}();
+		//Get the results and return them in the requested format. If a limit is set, the
+		//table name has already been set in the count_all_results() function and should not
+		//be set again.
+		$result = $this->database->get(($limit > 0 ? null : $this->_table))->{$this->get_return_type($multi)}();
 		$this->save_query();
+
+		if ($limit == 0) {
+			$this->_total_records_count = count($result);
+		}
 
 		$result = $this->relate_get($result);
 
@@ -384,7 +411,7 @@ class CRUDModel extends CI_Model {
 	 * beforehand on the used database.
 	 *
 	 *
-	 * @param array $row
+	 * @param array $row A single row with data
 	 * @param var $primary_values
 	 *        	The primary key value (or an array of values) of the row(s) to update. If omitted/set to
 	 *        	null (default), the updated data is not limited to the primary value and has to be defined
@@ -392,7 +419,6 @@ class CRUDModel extends CI_Model {
 	 *        	well.
 	 */
 	public function update($row, $primary_values = null) {
-		$primary_values = $this->primary_values_from_rows($row, $primary_values);
 
 		$ret = $this->trigger('before_update', array($row, $primary_values));
 		if ($ret === FALSE) {
@@ -773,7 +799,8 @@ class CRUDModel extends CI_Model {
 
 			//Check if the needed keys are present to resolve the relationship
 			if (! $this->row_key_exists($row, $local_key)) {
-				//$this->printRelationship();
+				//echo $this->printRelationship();
+				//print_array('', $row);
 				throw new Exception('Trying to resolve relationship ' . $this->_table . '->' . $with_table . '.
 										Key "' . $local_key . '" not found in local (' . $this->_table . ') row data.');
 			}
@@ -976,7 +1003,7 @@ class CRUDModel extends CI_Model {
 
 				//Combine the primary keys of all the rows. It is already known
 				//now that it is a single row.
-				$this->primary_values_from_rows($row, $primary_values, true);
+				$primary_values = $this->primary_values_from_rows($row, $primary_values, true);
 			}
 		}
 
@@ -1047,7 +1074,7 @@ class CRUDModel extends CI_Model {
 	 *
 	 * @param array $array
 	 */
-	private function flatten_array(array $array) {
+	public function flatten_array(array $array) {
 		$single = (count($array) <= 1);
 
 		if ($single) {
@@ -1102,6 +1129,17 @@ class CRUDModel extends CI_Model {
 	/*----------------------------------------------------------------------------------------
 	 * Query and relationship info
 	 */
+
+	/**
+	 * The total number of records from the last get() call. This is either the number of returned
+	 * records or if a limit has been used for the get() call, the number of returned records might
+	 * be lower than the total possible records (this is the number of records without the limit
+	 * statement, e.g. the number of records across all "pages").
+	 *
+	 */
+	public function get_total_records() {
+		return $this->_total_records_count;
+	}
 
 	/**
 	 * Save the last query if saving queries is enabled
